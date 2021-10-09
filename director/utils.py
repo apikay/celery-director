@@ -23,21 +23,51 @@ def format_schema_errors(e):
 
 
 def build_celery_schedule(workflow_name, data):
-    """ A celery schedule can accept seconds or crontab """
-    try:
-        schedule = float(data)
-    except ValueError:
-        try:
-            m, h, dw, dm, my = data.split(" ")
+    """A celery schedule can accept seconds or crontab"""
 
-            schedule = crontab(
+    def _handle_schedule(schedule):
+        try:
+            value = float(schedule)
+        except ValueError:
+            m, h, dw, dm, my = schedule.split(" ")
+            value = crontab(
                 minute=m,
                 hour=h,
-                day_of_week=dw,
                 day_of_month=dm,
                 month_of_year=my,
+                day_of_week=dw,
             )
-        except Exception as e:
-            raise WorkflowSyntaxError(workflow_name)
+        return value
 
-    return schedule
+    def _handle_crontab(ct):
+        m, h, dm, my, dw = ct.split(" ")
+        return crontab(
+            minute=m,
+            hour=h,
+            day_of_month=dm,
+            month_of_year=my,
+            day_of_week=dw,
+        )
+
+    excluded_keys = ["payload"]
+    keys = [k for k in data.keys() if k not in excluded_keys]
+
+    schedule_functions = {
+        # Legacy syntax for backward compatibility
+        "schedule": _handle_schedule,
+        # Current syntax
+        "crontab": _handle_crontab,
+        "interval": float,
+    }
+
+    if len(keys) != 1 or keys[0] not in schedule_functions.keys():
+        # When there is no key (schedule, interval, crontab) in the periodic configuration
+        raise WorkflowSyntaxError(workflow_name)
+
+    schedule_key = keys[0]
+    schedule_input = data[schedule_key]
+    try:
+        # Apply the function mapped to the schedule type
+        return str(schedule_input), schedule_functions[schedule_key](schedule_input)
+    except Exception:
+        raise WorkflowSyntaxError(workflow_name)
